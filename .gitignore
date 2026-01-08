@@ -1,0 +1,8 @@
+node_modules/
+.env
+cookies/fb_cookies.json
+cookies/scraped_links.json
+debug_no_list.png
+fail_scraped.png
+*.log
+.DS_Store
