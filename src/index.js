@@ -7,6 +7,40 @@ const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
 const { getFacebookProfileLink } = require('./scraper');
 
+// GỬI DATA SANG N8N
+async function sendToN8N(data) {
+    const url = process.env.N8N_WEBHOOK_URL;
+    const apiKey = process.env.N8N_API_KEY;
+
+    if (!url) {
+        console.warn('[N8N] ⚠️ Thiếu N8N_WEBHOOK_URL trong .env');
+        return;
+    }
+
+    const payload = {
+        page_id: String(data.pageId),
+        ps_id: String(data.psid),
+        m_id: String(data.messageId),
+        time_stamp: new Date().toISOString(),
+        customer_name: data.customerName || 'Người dùng Facebook',
+        customer_facebook_url: data.profileLink || null,
+        text: data.text || null,
+        extracted_phone_number: data.phoneNumber || null
+    };
+
+    try {
+        const config = {
+            headers: { 'Content-Type': 'application/json' }
+        };
+        if (apiKey) config.headers['X-API-Key'] = apiKey;
+
+        const response = await axios.post(url, payload, config);
+        console.log(`[N8N] ✅ Gửi webhook thành công:`, response.status);
+    } catch (e) {
+        console.error(`[N8N] ❌ Gửi webhook thất bại: ${e.message}`);
+    }
+}
+
 const app = express();
 app.use(express.json());
 
@@ -84,18 +118,33 @@ async function saveToGoogleSheets(data) {
 // LẤY TÊN QUA MESSAGE ID
 async function getCustomerNameFromAPI(psid, mid, page_token) {
     const token = page_token || process.env.PAGE_ACCESS_TOKEN;
+    if (!token) return 'Người dùng Facebook';
+
     try {
+        // Cách 1: Thử lấy từ Message ID (như bạn gợi ý)
         if (mid) {
-            const response = await axios.get(`https://graph.facebook.com/v18.0/${mid}`, {
+            const res = await axios.get(`https://graph.facebook.com/v21.0/${mid}`, {
                 params: { fields: 'from', access_token: token }
             });
-            if (response.data?.from?.name) return response.data.from.name;
+            if (res.data?.from?.name) {
+                console.log(`[API] Lấy tên từ Message ID: ${res.data.from.name}`);
+                return res.data.from.name;
+            }
         }
-        const res2 = await axios.get(`https://graph.facebook.com/${psid}`, {
-            params: { fields: 'name', access_token: token }
+
+        // Cách 2: Lấy từ PSID (Dự phòng)
+        const res = await axios.get(`https://graph.facebook.com/v21.0/${psid}`, {
+            params: { fields: 'name,first_name,last_name', access_token: token }
         });
-        return res2.data.name || 'Người dùng Facebook';
+        const name = res.data.name || `${res.data.first_name || ''} ${res.data.last_name || ''}`.trim();
+        if (name) {
+            console.log(`[API] Lấy tên từ PSID: ${name}`);
+            return name;
+        }
+
+        return 'Người dùng Facebook';
     } catch (e) {
+        console.error(`[API ERROR] Không lấy được tên: ${e.response?.data?.error?.message || e.message}`);
         return 'Người dùng Facebook';
     }
 }
@@ -136,11 +185,17 @@ async function processQueue() {
             if (scraped?.profileLink) {
                 resultData.customerName = (customerName !== 'Người dùng Facebook') ? customerName : (scraped.realName || customerName);
                 resultData.profileLink = scraped.profileLink;
+                resultData.phoneNumber = scraped.phoneNumber;
+
                 // Lưu vào cache để lần sau không quét và không lưu Sheets lặp lại
                 await saveToCache(psid, resultData);
 
                 // Lưu vào Sheets (Lần đầu tiên)
                 await saveToGoogleSheets(resultData);
+
+                // Gửi sang N8N (Logic bạn yêu cầu quay lại)
+                await sendToN8N(resultData);
+
                 if (isDirectApi && res) res.json({ success: true, data: resultData });
             }
         }
