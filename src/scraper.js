@@ -24,7 +24,7 @@ async function loadCookies(page) {
 async function getFacebookProfileLink(customerName, messageText, pageId) {
     console.log(`--- KHỞI CHẠY ROBOT (Target: ${customerName}) ---`);
     const browser = await puppeteer.launch({
-        headless: false,
+        headless: "new",
         defaultViewport: null,
         args: [
             '--no-sandbox',
